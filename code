@@ -1,0 +1,484 @@
+```{r}
+# set working directory to the location with all of your bed files
+setwd("C:/Users/cian/OneDrive/Desktop/Thesis/mc3_mutations1")
+# then make a list of all of the bed files by selecting all of the files that end in .bed
+datanames = list.files(pattern = "*.bed")
+
+install.packages("dplyr")
+install.packages("survival")
+install.packages("survminer")
+install.packages("tidyverse")
+install.packages("tidyr")
+install.packages("purrr")
+install.packages("ggplot2")
+
+library(dplyr)
+library(survival)
+library(survminer)
+library(tidyverse)
+library(tidyr)
+library(purrr)
+library(ggplot2)
+
+```
+
+
+
+```{r}
+# set working directory to the location with all of your bed files
+# then make a list of all of the bed files by selecting all of the files that end in .bed
+dataframenames = list.files(pattern = "*.bed")
+# this made a list of all of the names of the bed files
+# the bed files need to be imported into r
+reed_snp = function(x) {read.delim(x, sep = "\t", header=FALSE) %>% filter(nchar(V4) == 3)}
+# this function reads the bed files in and filters for snps only
+# you can remove everything after the '%>%' if the bed file has already been filtered for snps or if you do not # want to filter for snps
+SNP_data = lapply(dataframenames, reed_snp)
+# this function filters all the data sets for snps/single INDELS and stored the data.frames in a list called  
+# SNP_data
+```
+
+
+
+```{r}
+# If the bed files do not need to be filtered they can be read in as below
+reed2 = function(x) {read.delim(x, sep = "\t", header=TRUE)}
+mc3_mutations <- lapply(datanames, reed2)
+names(mc3_mutations) <- gsub("(mutation).*", "\\1", datanames)
+# when these files are read in they are stored as data.frames but they do not have the appropriate names 
+names(mc3_mutations) <- gsub("(mutation).*", "\\1", datanames)
+# this works to rename all the files appropriately
+# all of these data.frames contain the mutation data but do not have survival data
+
+# importing survival files
+mc3_survival = list.files(pattern = "*survival.txt")
+reed2 = function(x) {read.delim(x, sep = "\t", header=TRUE)}
+mc3_survival <- lapply(mc3_survival, reed2)
+# this successfully imported all of the survival files
+```
+
+
+
+```{r}
+# removing unnecessary columns
+remove_columns = function(x) {x[, -c(6,7,8,9,10,11,12,13)]}
+a <- remove_columns(mc3_mutations[[1]])
+mc3_mutations <- lapply(mc3_mutations, remove_columns)
+
+
+# renaming all of the files
+columnames <- c("chr", "start", "stop", "alt-ref", "sample", "mess")
+mc3_mutations <- lapply(mc3_mutations, setNames, columnames)
+
+```
+
+
+
+```{r}
+# The previous 3 code chunks that were applied to the mc3 files were applied to the TCGA files
+```
+
+
+
+```{r}
+# merging the mutation and survival data
+mc3_merge <- function(x, mc3_mutations, mc3_survivals) {
+  foo1 <- merge(mc3_mutations[[x]], mc3_survivals[[x]], 
+                by.x ="sample", by.y ="sample", all.x = TRUE, all.y = FALSE)
+  return(foo1)}
+x1 <- as.vector(c(1:32))
+
+mc3_mutations <- lapply(x1, mc3_mutations=mc3_mutations, mc3_survivals=mc3_survivals, mc3_merge)
+ 
+mc3_mutations <- bind_rows(mc3_mutations)
+```
+
+
+
+```{r}
+# The bed files I was working with had stored several columns in one column and were seperated by ','
+# these were all stored in column 14 and had to be separated
+tidy_up <- function(x) {x %>% separate(V14, 
+                        into=c("gene_ID", "transcript_ID", "gene_type",
+                         "gene_name", "transcript_type", "transcript_name", "exon_number", 
+                          "exon_ID", "level", "tag1", "tag2", "havana_gene", "havana_transcript")
+                           , sep=";") }
+# this function splits up column 14 and assigns titles to all of the new columns
+mc3_mutations <- lapply(tidy_up, mc3_mutations)
+```
+
+
+
+```{r}
+# removing unnecessary columns
+remove_columns = function(x) {x[, -c(7,8,10,11,12,13,14,15,16,17,18)]}
+mc3_mutations <- lapply(mc3_mutations, remove_columns)
+```
+
+
+
+```{r}
+# To examine the effect mutations in each gene have on survival a list of all of the mutated genes 
+# needs to be made
+# All of the columns containing the gene IDs in these particular data.frames were written as " gene_id xxx"
+# the "gene_id " string needs to be removed
+remove_gene_id = function(x) {map_df(x, ~ gsub("gene_id ", "", .x))}
+# this function removes the unwanted string
+mc3_mutations <- lapply(mc3_mutations, remove_gene_id)
+# this removed the string from all of the data.frames
+```
+
+
+
+```{r}
+# removing duplicate rows
+singular = function(x) {x[!duplicated(x[c(1,2,3,4,5)]),]}
+mc3_mutations <- lapply(mc3_mutations, singular)
+
+
+# removing all rows with NAs and any empty data.frames
+mc3_mutations <- lapply(mc3_mutations, na.omit)
+mc3_mutations <- mc3_mutations[sapply(mc3_mutations, function(x) dim(x)[1]) > 0]
+
+```
+
+
+
+```{r}
+# adding counts for each gene per cancer type to the data.frames
+
+x <- cancer_mutations[[2]]
+counts_type1 = function(x) {
+  df <- x
+  df1 <- table(df$gene_ID)
+  df2 <- as.data.frame(df1)
+  colnames(df2) <- c("gene_ID", "Freq")
+  df3 <- merge(df, df2, by = "gene_ID")
+  return(df3)
+}
+
+mc3_mscounts <- lapply(mc3_mutations, counts_type1)
+
+
+# filtering datafrmaes for counts larger than 10
+greater_than5 = function(x) { x[x[,11]>10,]}
+mc3_mscounts1 <- lapply(mc3_mscounts, greater_than5)
+mc3_mscounts2 <- mc3_mscounts1[sapply(mc3_mscounts1, function(x) dim(x)[1]) > 0]
+```
+
+
+
+```{r}
+# now we can make a list of all the genes in all of the data.frames
+list_genes = function(x) {list(x$gene_ID)}
+all_geneIDs <- lapply(cancer_mscounts2, list_genes)
+all_GENEIDs <- unlist(all_geneIDs, recursive = FALSE)
+all_GENEIDs <- do.call(c, all_GENEIDs)
+# now we have a list but it contains duplicate so we have to remove them
+un <- unlist(all_GENEIDs)
+all_genes <- Map(`[`, all_GENEIDs, relist(!duplicated(un), skeleton = all_GENEIDs))
+all_genes <- all_genes[lapply(all_genes,length)>0]
+rm(all_GENEIDs, un, a, all_geneIDs) # this removes all of the unnecessary data from the global environment
+
+```
+
+
+
+```{r}
+# setwd
+setwd("C:/Users/cian/OneDrive/Desktop/Thesis/mergerd_data")
+# to save all of the files to your computer you can use the following function
+lapply(names(mc3_mscounts2),
+       function(x, mc3_mscounts2) write.table(mc3_mscounts2[[x]], paste(x, ".txt", sep = ""),
+                                           col.names=TRUE, row.names=FALSE, sep="\t", 
+                                           quote=FALSE),
+       mc3_mscounts2)
+### worked to export all dataframes in the list as there own file
+```
+
+
+
+```{r}
+# To read the files into a loop you need a list of all of the file names
+setwd("C:/Users/cian/OneDrive/Desktop/Thesis/mergerd_data")
+names <- list.files("C:/Users/cian/OneDrive/Desktop/Thesis/mergerd_data")
+# this works to make a list of all of the file names for the mc3_ms data.frames that were saved in the previous
+# code chunk
+```
+
+
+
+```{r}
+# this list of mutation and survival files and the gene ids can be crossed to make a data.frame that will allow us to 
+# compare each gene within each data.frame(cancer type in this case)
+crossed = crossing(names, all_genes)
+# this data.frame will be used in the rest of the analysis 
+```
+
+
+
+```{r}
+# to interpret if which genes are significant in which cancers a cox regression model needs to be fitted
+
+cox_test <- data.frame() # we need an empty dataframe to store the output
+
+cox_fun = function(x, y) { 
+  #x is the name of your data.frame (cancer type)
+  #y is you gene id you're interested in 
+  print(x)
+  print(y)
+  setwd("C:/Users/cian/OneDrive/Desktop/Thesis/cancer_counts2")
+  read_file = paste0("C:/Users/cian/OneDrive/Desktop/Thesis/cancer_counts2", "/", x)
+  df <- read.table(read_file, sep = "\t", header=T)
+  df2 <- df[grep(y, df[[1]]),] 
+  #remove duplicates from df2 so a patient only appears once
+  df2_1 <- df2[!duplicated(df2$patient), ]
+  df2 <- df2_1
+  df2_check <- df2[is.na(df2$OS) == 0, ]
+  if (nrow(df2_check) != 0)
+  {
+   df_sum <- sum(df2$OS)
+   if (df_sum != 0)
+   {
+   if(nrow(df2) >= 5)
+   {
+   df3 <- df[!grepl(y, df[[1]]),]
+   df3_1 <- df3[!duplicated(df3$patient), ]
+   df3 <- df3_1
+   if (nrow(df3)> 1)
+   {
+   df4 <- df2[df2$X_PATIENT %in% df3$X_PATIENT, ]
+   if(nrow(df4) > 0)
+   {
+     df3_2 <- df3[!df3$X_PATIENT %in% df2$X_PATIENT, ]
+     df3 <- df3_2
+   }
+   df3$group <- "A"
+   df2$group <- "B" 
+   df1_OS <- rbind(df2, df3)
+   x = gsub("\\..*", "", x)
+   skip <- FALSE
+   cox <- coxph(Surv(OS.time, OS) ~ group, data = df1_OS)
+   # tryCatch skips over errors
+   if(skip == F)
+   {
+   w <- summary(cox)
+   T <- w$coefficients
+   T <- as.data.frame(T)
+   hz <- T$`exp(coef)`
+   output <- c(x, y, hz)
+   cox_tests1 <- rbind(cox_test, output)  
+   }}}}}}
+z <- cox_fun(x,y)
+rm(x,y,z,df,df2,df3,df2_1,df2_check,df_sum,df3_1,df4,df3_2,skip,w,T,hz,output,cox_tests1)
+
+cox_testsa <- mapply(cox_fun, crossed$names, crossed$all_genes)
+cox_testsb <- cox_testsa[lapply(cox_testsa,length)>0]
+columnames <- c("cancer type", "Gene ID", "hz")
+cox_testsc <- lapply(cox_testsb, setNames, columnames)
+cox_testsc <- bind_rows(cox_testsc)
+cox_testsd <- split(cox_testsc, cox_testsc$'cancer type')
+cox_testsd <- cox_testsd[sapply(cox_testsd, function(x) dim(x)[1]) > 0]
+
+
+```
+
+
+
+```{r}
+# the hazard ratio can be added to the main data.frame
+cms_merge = function(x, cancer_mscounts1, cox_testsd) {
+  foo1 <- merge(cancer_mscounts1[[x]], cox_testsd[[x]], 
+                by.x = "gene_ID", by.y = "Gene ID", all.x = TRUE, all.y = FALSE)
+  return(foo1)}
+# this is the function
+# x1 gives the list of files to merge
+x1 <- as.vector(c(1:37)) # number of data frames in each list should be the same and that is what x1 is equal to
+cancers <- lapply(x1, cancer_mscounts1=cancer_mscounts1, cox_testsd=cox_testsd, cms_merge)
+rm(x1)
+cancers <- bind_rows(cancers)
+cancers_list <- split(cacners, cacners$`cancer type`)
+```
+
+
+```{r} 
+cancer_mutations = data.frame() # we need an empty dataframe to store the output
+gene_significance1 = function(x, y) {
+  print(x)
+  print(y)
+  setwd("C:/Users/cian/OneDrive/Desktop/Thesis/cancer_counts2")
+  read_file = paste0("C:/Users/cian/OneDrive/Desktop/Thesis/cancer_counts2", "/", x)
+  df <- read.table(read_file, sep = "\t", header=T)
+  df2 <- df[grep(y, df[[1]]),] 
+  #remove duplicates from df2 so a patient only appears once
+  df2_1 <- df2[!duplicated(df2$patient), ]
+  df2 <- df2_1
+  df2_check <- df2[is.na(df2$OS) == 0, ]
+  if (nrow(df2_check) != 0)
+  {
+  df_sum <- sum(df2$OS)
+  if (df_sum != 0)
+  {
+  if(nrow(df2) >= 5)
+  {
+  df3 <- df[!grepl(y, df[[1]]),]
+  df3_1 <- df3[!duplicated(df3$patient), ]
+  df3 <- df3_1
+  if (nrow(df3)> 1)
+  {
+  df4 <- df2[df2$X_PATIENT %in% df3$X_PATIENT, ]
+  if(nrow(df4) > 0)
+  {
+  df3_2 <- df3[!df3$X_PATIENT %in% df2$X_PATIENT, ]
+  df3 <- df3_2
+  }
+  df3$group <- "A"
+  df2$group <- "B" 
+  df1_OS <- rbind(df2, df3)
+  x = gsub("\\..*", "", x)
+  skip <- FALSE
+  # tell r that skip is false
+  surv_diff <- tryCatch(survdiff(Surv(OS.time, OS) ~ group, data = df1_OS), error = function(e) {skip <<- TRUE})
+  # the first part of this performs the log rank test on the data.frame like in the last code chunk
+  # the part after ',' tells r that if there is an error that skip is true
+  # that means if the log rank test cannot be done because thers a problem with the data skip will now be true
+  if(skip == F)
+  # if skip remains as false then there was no error so the code can keep running
+  # However, if skip is true then r will skip this data and move onto the next one
+  {
+  pvalue <- surv_diff$pvalue
+  chisq <- surv_diff$chisq
+  output <- c(x, y, pvalue,chisq)
+  cancer_mutations <- rbind(cancer_mutations, output)
+  }
+  }
+  }
+  }
+  }
+  }
+
+gene_test <- mapply(gene_significance1, crossed$names3, crossed$all_genes)
+gene_test1 <- gene_test[lapply(gene_test,length)>0]
+columnames <- c("cancer type", "Gene ID", "p value")
+gene_test2 <- lapply(gene_test1, setNames, columnames)
+gene_test3 <- bind_rows(gene_test2)
+gene_test4 <- split(gene_test3, gene_test3$'cancer type')
+gene_test4 <- gene_test4[sapply(gene_test4, function(x) dim(x)[1]) > 1
+                         
+# This data frame can be merged with the main dataframe in the same way as code chunk 16
+```
+
+
+
+```{r}
+# to visualize the p value and hazard ratio a heat map can be made
+
+HR_heatmap <- ggplot(data = cancers_6, aes(x=cancer.type, y=gene_name, fill=hz)) + 
+geom_tile(color = "black") + scale_fill_gradient2(low="blue", mid="white", high="red", midpoint = 1, limits = c(0, 3.2)) + 
+theme_classic() + theme() + geom_text(aes(label = Freq), color = "black", size = 2) + 
+theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size=10),
+axis.text.y = element_text(size=10), legend.text = element_text(size=10), 
+legend.title = element_text(size=12), axis.title.x = element_text(size=12), 
+axis.title.y = element_text(size=12)) + labs(fill = "HR") + ylab("Gene name") + xlab("Cancer type") 
+HR_heatmap
+
+P_heatmap <- ggplot(data = cancers_6, aes(x=cancer.type, y=gene_name, fill=p.value.y)) + 
+geom_tile(color = "black") + scale_fill_gradient2(low="red", mid="red", high="yellow", na.value="white", limits = c(0, 0.05)) + 
+theme_classic() + theme() + geom_text(aes(label = Freq), color = "black", size = 2) + 
+theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size=10),
+axis.text.y = element_text(size=10), legend.text = element_text(size=10), 
+legend.title = element_text(size=10), axis.title.x = element_text(size=12), 
+axis.title.y = element_text(size=12)) + labs(fill = "HR") + ylab("Gene name") + xlab("Cancer type") 
+P_heatmap
+
+```
+
+
+
+```{r}
+# To visualize how each gene affects survival a Kaplan-Meier curve was made that compared all patients with a 
+# mutation in a particular gene with all of the patients without a mutation in that gene
+new_create_KM = function(x, y) { 
+  #x is the name of your data.frame (cancer type)
+  #y is you gene id you're interested in 
+  read_file = paste0("C:/Users/cian/OneDrive/Desktop/Thesis/mergerd_data", "/", x)
+  df <- read.table(read_file, sep = "\t", header=T)
+  df2 <- df[grep(y, df[[7]]),] 
+  # df2 is all of the patients with mutations in the gene and column 14 contains the gene id
+  #remove duplicates from df2 so a patient only appears once
+  df2_1 <- df2[!duplicated(df2$patient), ]
+  df2 <- df2_1
+  df2_check <- df2[is.na(df2$OS) == 0, ]
+  if (nrow(df2_check) != 0)
+  {
+  df_sum <- sum(df2$OS)
+  if (df_sum != 0)
+  {
+  if (nrow(df2) > 5)
+    # this filters out all mutations that occur in less than 10 samples so there is a reliable sample size
+  {
+  df3 <- df[!grepl(y, df[[7]]),]
+   # df3 is all of the patients without mutations in the gene (control group)
+  {
+    df4 <- df2[df2$X_PATIENT %in% df3$X_PATIENT, ]
+    # this is to tell us if patients are in both data.frames
+    if(nrow(df4) > 0)
+    {
+      df3_1 <- df3[!df3$V5 %in% df2$V5, ]
+      # this removes patients that appear in both groups from the control 
+      df3 <- df3_1
+    }
+    df2$group <- "A"
+    df3$group <- "B" 
+    #  the groups need to be labelled to distinguish them from each other in the survival analysis 
+    df1_OS <- rbind(df2,df3)
+    x = gsub("\\..*", "", x)
+    name_of_file = paste("KM", "Curve", x, y, sep="_")
+    survival_function <- surv_fit(Surv(df1_OS$OS.time, df1_OS$OS)~group, data=df1_OS) 
+    pval_sav <- surv_pvalue(survival_function)
+    if (pval_sav$pval <= 0.05)
+    # this filter only selects for the Kaplan-Meier curves that have a p value of less than 0.05
+    {
+      filename= paste0('C:/Users/cian/OneDrive/Desktop/Thesis/Graphs2/', name_of_file, ".pdf", sep="")
+      # I changed destination to graphs 2 so I could use the new all_genes
+      pdf(filename)
+      # this opens a pdf that the Kaplan-Meier curve will be printed into
+      a <- ggsurvplot(survival_function, conf.int=TRUE, pval=TRUE, risk.table=TRUE, 
+                      legend.labs=c("mutation", "no mutation"), legend.title="lncRNA status", 
+                      palette=c("orangered1", "royalblue"), title=name_of_file) 
+      print(a)
+      dev.off()
+    }}}}}
+# this function creates a km curve comparing the effect on survival each gene has within each cancer type
+
+mapply(new_create_KM, crossed$names, crossed$all_genes)
+# mapply is used to run a loop over a list of dataframes
+```
+
+
+
+```{r}
+# The number of patients in each cancer type can be graphed to show the statistical power of each data set
+p<-ggplot(data=m_p, aes(x=Cancer_Type, y=No.Patients)) +
+  scale_fill_viridis(discrete = TRUE, alpha = 0.7, option = "C") +   # Colour palette of graph
+  geom_bar(stat="identity", position=position_dodge()) +                       
+  theme_classic() + theme() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size=12),
+        axis.text.y = element_text(size=12), legend.text = element_text(size=12), 
+        legend.title = element_text(size=12), axis.title.x = element_text(size=12), 
+        axis.title.y = element_text(size=12)) + ylab("No. Patients") + xlab("Cancer type")
+p
+
+
+# the number of mutations per patient in a certain cancer type can also be graphed 
+q<-ggplot(data=m_p, aes(x=Cancer_Type, y=Mutations_per_Patient)) +
+  scale_fill_viridis(discrete = TRUE, alpha = 0.7, option = "C") +   # Colour palette of graph
+  geom_bar(stat="identity", position=position_dodge()) +                       
+  theme_classic() + theme() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1, size=12),
+        axis.text.y = element_text(size=12), legend.text = element_text(size=12), 
+        legend.title = element_text(size=12), axis.title.x = element_text(size=12), 
+        axis.title.y = element_text(size=12)) + ylab("No. Mutations/Patients") + xlab("Cancer type")
+q
+
+```
